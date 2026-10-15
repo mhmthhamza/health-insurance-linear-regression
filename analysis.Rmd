@@ -1,0 +1,98 @@
+---
+title: "Sağlık Sigortası Masraflarının Doğrusal Regresyon ile Modellenmesi"
+subtitle: "Regresyon varsayımları, model tanıları ve model karşılaştırması"
+author: "Mehmet Hamza"
+date: "`r format(Sys.Date(), '%d.%m.%Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    theme: flatly
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      fig.width = 7, fig.height = 4.5, dpi = 110)
+options(scipen = 999)
+library(car); library(lmtest); library(nortest)
+library(pls); library(caret)
+library(PerformanceAnalytics)
+```
+
+# Amaç
+
+Bu çalışmada bir sağlık sigortası şirketinin müşterilerine ait 1338 gözlemlik bir veri seti üzerinde **yıllık sigorta masrafı** (`charges`) yaş, BMI, çocuk sayısı, sigara kullanımı, cinsiyet ve bölge ile nasıl açıklanır sorusu **çoklu doğrusal regresyon** ile yanıtlanır. Aynı verinin lojistik regresyon ile analizi ayrı bir depodadır (`health-insurance-logistic-regression`).
+
+Analiz şu akışı izler: veri inceleme → eğitim/test ayırma → model kurma → varsayım kontrolleri → sorun çıkınca dönüşüm / değişken seçimi / etkileşim terimi / aykırı gözlem analizi / ağırlıklı en küçük kareler → test verisinde performans ve çapraz doğrulama.
+
+# Veri
+
+```{r veri}
+d <- read.csv("data/insurance.csv", stringsAsFactors = TRUE)
+d$smoker <- relevel(d$smoker, ref = "no")
+str(d)
+summary(d)
+cat("Eksik gözlem sayısı:", sum(is.na(d)), "\n")
+```
+
+| Değişken | Tür | Açıklama |
+|---|---|---|
+| `charges` | sürekli (**Y**) | Yıllık sağlık sigortası masrafı |
+| `age` | sürekli | Yaş |
+| `bmi` | sürekli | Vücut kitle indeksi |
+| `children` | sayım | Çocuk sayısı |
+| `smoker` | nitel (2 düzey) | Sigara kullanımı |
+| `sex` | nitel (2 düzey) | Cinsiyet |
+| `region` | nitel (4 düzey) | Bölge |
+
+> **Veri kaynağı ve uyarı:** `insurance.csv`, Brett Lantz'ın *Machine Learning with R* kitabı ile ilişkilendirilen ve Kaggle'da da bulunan açık bir eğitim veri setidir. Bu çalışmada GitHub'daki `stedy/Machine-Learning-with-R-datasets` deposundaki kopyası kullanılmıştır. Verinin ilk kaynağı ve lisansı doğrulanmamıştır; **gerçek bir şirket verisi olduğuna dair belge yoktur ve büyük olasılıkla simüle edilmiştir.** Bu nedenle bulgular gerçek bir sigorta portföyüne genellenmemeli, bir eğitim uygulaması olarak değerlendirilmelidir.
+
+**Nitel değişkenler ve kukla (dummy) değişkenler.** `smoker` ve `sex` iki düzeyli olduğundan 1'er, `region` dört düzeyli olduğundan 3 kukla değişken oluşur (n−1 kuralı). R, faktör değişkenleri `lm` içinde otomatik olarak kukla değişkene çevirir; referans düzeyler `smoker = no`, `sex = female`, `region = northeast`'tir.
+
+```{r dummy}
+head(model.matrix(charges ~ ., data = d), 4)
+```
+
+# Ön İnceleme
+
+```{r on-inceleme-1}
+par(mfrow = c(1, 2))
+hist(d$charges, main = "charges", xlab = "charges", col = "steelblue")
+hist(log(d$charges), main = "log(charges)", xlab = "log(charges)", col = "darkorange")
+par(mfrow = c(1, 1))
+```
+
+`charges` belirgin biçimde sağa çarpıktır; logaritma dönüşümü dağılımı simetriğe yaklaştırır. Bu durum normallik ve sabit varyans varsayımları için önemli olacaktır.
+
+```{r on-inceleme-2}
+boxplot(charges ~ smoker, data = d, col = c("lightblue", "salmon"),
+        main = "Sigara kullanımına göre masraf", xlab = "smoker", ylab = "charges")
+chart.Correlation(d[, c("age", "bmi", "children", "charges")], histogram = TRUE, pch = 19)
+```
+
+```{r on-inceleme-3}
+renk <- ifelse(d$smoker == "yes", "red", "steelblue")
+plot(d$bmi, d$charges, col = renk, pch = 19, cex = 0.6,
+     main = "Masraf - BMI ilişkisi (sigara kullanımına göre)", xlab = "bmi", ylab = "charges")
+abline(v = 30, lty = 2)
+legend("topleft", c("sigara içmeyen", "sigara içen"), col = c("steelblue", "red"), pch = 19)
+```
+
+Sigara içenler ayrı bir küme oluşturur ve **içenlerde BMI ≈ 30'dan sonra masraf belirgin biçimde sıçrar**; içmeyenlerde böyle bir kırılma görülmez. Yani BMI'nin etkisi sigara kullanımına göre değişiyor gibidir. Bu, ilerleyen bölümlerde bir **etkileşim terimi** ile sınanacaktır.
+
+Sigara içenlerin masrafı belirgin biçimde yüksektir. Sayısal bağımsız değişkenler arasındaki korelasyonlar düşüktür; çoklu bağlantı beklenmez (VIF ile doğrulanacaktır).
+
+# Eğitim / Test Ayırma
+
+Veri %80 eğitim, %20 test olarak bölünmüştür (`set.seed(145)`).
+
+```{r bol}
+set.seed(145)
+sampleindx <- sample(1:nrow(d), size = 0.8 * nrow(d))
+trainset <- d[sampleindx, ]
+testset  <- d[-sampleindx, ]
+c(egitim = nrow(trainset), test = nrow(testset))
+```
+
