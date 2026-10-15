@@ -96,3 +96,61 @@ testset  <- d[-sampleindx, ]
 c(egitim = nrow(trainset), test = nrow(testset))
 ```
 
+# Doğrusal Regresyon
+
+## Başlangıç modeli (tüm değişkenlerle)
+
+```{r m1}
+model1 <- lm(charges ~ ., data = trainset)
+summary(model1)
+```
+
+**Yorum.** Model bütün olarak anlamlıdır (F testi p < 0,001) ve düzeltilmiş R² ≈ 0,76'dır. `age`, `bmi`, `children` ve `smoker` katsayıları anlamlıdır; `sex` ve `region` düzeyleri anlamsızdır (p > 0,05). Diğer değişkenler sabitken sigara içenlerin masrafı ortalama ≈ 23.750 birim yüksektir, yaşın her yılı ≈ 264, BMI'nin her birimi ≈ 331 birim ekler. Ancak bu t-testlerine güvenebilmek için varsayımların sağlanması gerekir.
+
+## Varsayım kontrolleri
+
+### Normallik
+
+```{r normallik-m1}
+artiklar <- residuals(model1)
+par(mfrow = c(1, 2))
+qqnorm(artiklar, main = "Q-Q grafiği"); qqline(artiklar, col = "red", lwd = 2)
+hist(artiklar, main = "Artıkların histogramı", xlab = "Artıklar", col = "lightblue")
+par(mfrow = c(1, 1))
+shapiro.test(artiklar)
+lillie.test(artiklar)
+ad.test(artiklar)
+```
+
+**Hipotezler:** H0: artıklar normal dağılır; H1: normallikten sapar. Üç testin (Shapiro-Wilk W ≈ 0,90; Lilliefors D ≈ 0,16; Anderson-Darling A ≈ 35) p-değerleri de 0,05'ten çok küçüktür; **H0 reddedilir, artıklar normal dağılmaz.** Q-Q grafiğinde özellikle sağ uçta çizgiden belirgin sapma vardır.
+
+### Sabit varyans
+
+```{r varyans-m1}
+plot(fitted(model1), residuals(model1), main = "Sabit varyans kontrolü",
+     xlab = "Tahmin (y şapka)", ylab = "Artıklar")
+abline(h = 0, col = "red")
+
+# Breusch-Pagan testi (H0: varyans sabittir)
+bptest(model1)
+
+# White testi (elle): artık karelerini fitted ve fitted^2 üzerine regresle
+kare_artiklar <- residuals(model1)^2
+f <- fitted(model1)
+white <- lm(kare_artiklar ~ f + I(f^2))
+summary(white)   # F testinin p-değeri H0 (sabit varyans) için karar verir
+```
+
+Breusch-Pagan testi (BP ≈ 121, p < 0,001) ve elle yapılan White testinin F testi (p ≈ 10⁻²⁴) H0'ı reddeder: **varyans sabit değildir.** Artık–tahmin grafiği de bunu gösterir; üstelik düzgün bir huni yerine **birbirinden ayrışmış artık kümeleri** görülür. Bu, modelde sigara içenler ile içmeyenler arasında açıklanamayan bir yapı kaldığına işaret eder.
+
+### Otokorelasyon ve çoklu bağlantı
+
+```{r otokor-m1}
+dwtest(model1)   # H0: otokorelasyon yoktur
+vif(model1)      # 10'dan büyük ise müdahale gerekir
+```
+
+Durbin-Watson istatistiği ≈ 1,95 (1,5–2,5 arası), p ≈ 0,23: **otokorelasyon yoktur** (veri zaman serisi de değildir). Tüm VIF değerleri ≈ 1'dir (en büyüğü ≈ 1,10): **çoklu bağlantı sorunu yoktur.**
+
+**Özet:** Çoklu bağlantı ve otokorelasyon sorunu yok; fakat **normallik ve sabit varyans varsayımları sağlanmıyor.** Bu durumda ilk akla gelen çözüm bağımlı değişkene log dönüşümüdür.
+
