@@ -154,3 +154,81 @@ Durbin-Watson istatistiği ≈ 1,95 (1,5–2,5 arası), p ≈ 0,23: **otokorelas
 
 **Özet:** Çoklu bağlantı ve otokorelasyon sorunu yok; fakat **normallik ve sabit varyans varsayımları sağlanmıyor.** Bu durumda ilk akla gelen çözüm bağımlı değişkene log dönüşümüdür.
 
+## Çözüm 1: Bağımlı değişkene log dönüşümü
+
+Değişen varyans ve normallik sapması durumunda ilk akla gelen çözüm bağımlı değişkene **logaritmik dönüşüm** uygulamaktır.
+
+```{r m2}
+model2 <- lm(log(charges) ~ ., data = trainset)
+summary(model2)
+
+artiklar2 <- residuals(model2)
+par(mfrow = c(1, 2))
+plot(fitted(model2), artiklar2, main = "log modeli: artık - tahmin", xlab = "Tahmin", ylab = "Artıklar")
+abline(h = 0, col = "red")
+qqnorm(artiklar2, main = "log modeli Q-Q"); qqline(artiklar2, col = "red", lwd = 2)
+par(mfrow = c(1, 1))
+
+shapiro.test(artiklar2)
+bptest(model2)
+dwtest(model2)
+```
+
+**Yorum.** Düzeltilmiş R² ≈ 0,79'a yükselmiş, `sex` ve `region`'ın bazı düzeyleri anlamlı hale gelmiştir. Log modelde katsayılar yaklaşık yüzde değişim olarak yorumlanır; örneğin sigara içmek beklenen masrafı yaklaşık `r round((exp(coef(model2)["smokeryes"]) - 1) * 100)`% artırır. Ancak **sorun çözülmemiştir:** Breusch-Pagan hâlâ H0'ı reddeder (BP ≈ 54, p < 0,001; değer yarıdan fazla düşmüştür ama anlamlıdır), Shapiro-Wilk W ≈ 0,84 ile normallik reddedilir (hatta kötüleşmiştir). Artık–tahmin grafiğinde eğrisel bir örüntü ve ayrı bir artık kümesi görülür; Q-Q grafiği S biçimindedir. Durbin-Watson (≈ 1,96) yine sorunsuzdur.
+
+## Çözüm 2: Adımsal (stepwise) değişken seçimi
+
+```{r step}
+tam  <- lm(log(charges) ~ age + sex + bmi + children + smoker + region, data = trainset)
+bos  <- lm(log(charges) ~ 1, data = trainset)
+ileri <- step(bos, direction = "forward", scope = formula(tam), trace = 0)
+geri  <- step(tam, direction = "backward", trace = 0)
+cift  <- step(bos, direction = "both", scope = formula(tam), trace = 0)
+data.frame(Yontem = c("Forward", "Backward", "Both"),
+           Model = c(deparse(formula(ileri)), deparse(formula(geri)), deparse(formula(cift))),
+           AIC = c(AIC(ileri), AIC(geri), AIC(cift)))
+```
+
+**Yorum.** Forward, backward ve both yöntemlerinin üçü de aynı modeli (tüm değişkenler) seçer ve AIC değeri aynıdır (≈ 1199,1). AIC'ye göre hiçbir değişkeni çıkarmak modeli iyileştirmez; yani **sorun değişken seçiminden kaynaklanmıyor.**
+
+## Çözüm 3: Etkileşim terimi (sigara × obezite)
+
+Artık grafikleri birbirinden ayrışmış kümeler gösteriyordu; ön incelemede de BMI'nin etkisinin sigara kullanımına bağlı olduğunu görmüştük. Bir değişkenin etkisi başka bir değişkenin düzeyine göre değişiyorsa modele **etkileşim terimi** eklenir.
+
+BMI'yi, Dünya Sağlık Örgütü'nün obezite eşiği olan 30'a göre iki düzeyli bir değişkene (`obese`) çeviriyoruz ve `smoker * obese` etkileşimini kuruyoruz. R, `smoker * obese` yazımını `smoker + obese + smoker:obese` olarak açar. Modelde BMI yerine `obese` kullanılır (ikisini birlikte almak gereksiz çoklu bağlantı doğurur).
+
+```{r etkilesim}
+obez_ekle <- function(x) { x$obese <- factor(ifelse(x$bmi >= 30, "yes", "no"), levels = c("no", "yes")); x }
+trainset_e <- obez_ekle(trainset); testset_e <- obez_ekle(testset)
+
+model_e <- lm(log(charges) ~ age + sex + children + region + smoker * obese, data = trainset_e)
+summary(model_e)
+
+# Etkileşimin katkısı: etkileşimsiz modelle karşılaştırma (H0: etkileşim katkı sağlamaz)
+model_e0 <- lm(log(charges) ~ age + sex + children + region + smoker + obese, data = trainset_e)
+anova(model_e0, model_e)
+AIC(model2, model_e0, model_e)
+```
+
+Varsayımlar etkileşimli modelde yeniden kontrol edilir:
+
+```{r etkilesim-tani}
+artiklar_e <- residuals(model_e)
+par(mfrow = c(1, 2))
+plot(fitted(model_e), artiklar_e, main = "Etkileşimli model: artık - tahmin", xlab = "Tahmin", ylab = "Artıklar")
+abline(h = 0, col = "red")
+qqnorm(artiklar_e, main = "Etkileşimli model Q-Q"); qqline(artiklar_e, col = "red", lwd = 2)
+par(mfrow = c(1, 1))
+shapiro.test(artiklar_e)
+bptest(model_e)
+dwtest(model_e)
+vif(model_e)
+```
+
+**Yorum.**
+
+- **Etkileşim çok anlamlıdır.** `smoker:obese` katsayısı ≈ 0,66 (p < 0,001); etkileşimsiz modele göre karşılaştırma F testi p < 0,001'dir (H0: etkileşim katkı sağlamaz, reddedilir). AIC ≈ 1199'dan ≈ 1090'a düşmüştür (≈ 108 puanlık iyileşme; 10 puan fark çok güçlü kabul edilir). Düzeltilmiş R² ≈ 0,81'dir.
+- **Yorumu:** Sigara içmeyenlerde obezite masrafı anlamlı değiştirmez (`obese` katsayısı ≈ 0,03, p ≈ 0,27). Sigara içenlerde ise obezite (ana etki + etkileşim) beklenen masrafı yaklaşık %`r round((exp(coef(model_e)["obeseyes"] + coef(model_e)["smokeryes:obeseyes"]) - 1) * 100)` artırır. Yani **obezitenin etkisi yalnızca sigara içenlerde ortaya çıkar**; etkileşim olmadan bu bilgi modelde görünmüyordu.
+- **Varsayımlar:** Breusch-Pagan hâlâ H0'ı reddeder (BP ≈ 46, p < 0,001) ama log modele göre (BP ≈ 54, p ≈ 10⁻⁹) p-değeri belirgin biçimde yükselmiştir. Shapiro-Wilk (W ≈ 0,81) normalliği reddeder, normallik sorunu giderilememiştir. Artık–tahmin grafiğinde ayrışmış kümeler azalmış ama tamamen kaybolmamıştır; kalan kümelerin kaynağı bu modelde açıklanamamaktadır.
+- Durbin-Watson ≈ 2,01 (otokorelasyon yok); VIF değerleri ≤ 2,4 (çoklu bağlantı yok).
+
