@@ -232,3 +232,128 @@ vif(model_e)
 - **Varsayımlar:** Breusch-Pagan hâlâ H0'ı reddeder (BP ≈ 46, p < 0,001) ama log modele göre (BP ≈ 54, p ≈ 10⁻⁹) p-değeri belirgin biçimde yükselmiştir. Shapiro-Wilk (W ≈ 0,81) normalliği reddeder, normallik sorunu giderilememiştir. Artık–tahmin grafiğinde ayrışmış kümeler azalmış ama tamamen kaybolmamıştır; kalan kümelerin kaynağı bu modelde açıklanamamaktadır.
 - Durbin-Watson ≈ 2,01 (otokorelasyon yok); VIF değerleri ≤ 2,4 (çoklu bağlantı yok).
 
+## Çözüm 4: Aykırı ve etkili gözlemler
+
+Standartlaştırılmış artıklar, Cook uzaklığı (4/n ve 3·ortalama ölçütleri), kaldıraç (2p/n) ve DFFITS incelenir. **Hem standart artığı büyük (|r| > 2) hem de Cook uzaklığı büyük olan** gözlemler aykırı ve etkili kabul edilir.
+
+```{r etkili}
+n <- nrow(trainset); p <- length(coef(model2))
+dist  <- cooks.distance(model2)
+sres  <- rstandard(model2)
+lev   <- hatvalues(model2)
+dff   <- dffits(model2)
+
+olcut1 <- mean(dist) * 3
+olcut2 <- 4 / n
+
+c(Cook_3ort = sum(dist > olcut1), Cook_4n = sum(dist > olcut2),
+  std_artik_2 = sum(abs(sres) > 2), kaldirac_2pn = sum(lev > 2 * p / n),
+  DFFITS = sum(abs(dff) > 2 * sqrt(p / n)))
+
+plot(1:length(dist), dist, type = "p", main = "Cook uzaklığı", xlab = "Gözlem", ylab = "Cook D")
+abline(h = olcut1, col = "red"); abline(h = olcut2, col = "green")
+
+outliers <- which(dist > olcut2 & abs(sres) > 2)
+length(outliers)
+trainsetrem <- if (length(outliers) > 0) trainset[-outliers, ] else trainset
+c(oncesi = nrow(trainset), sonrasi = nrow(trainsetrem))
+
+model3 <- lm(log(charges) ~ ., data = trainsetrem)
+summary(model3)
+```
+
+**Yorum.** Farklı ölçütler 12 ile 109 arasında değişen sayıda şüpheli gözlem işaretler (Cook > 3·ort: 109; Cook > 4/n: 90; |std. artık| > 2: 70; DFFITS: 90; yüksek kaldıraç: 12). Hem Cook hem standart artık ölçütünü aşan **63 gözlem** çıkarılmış, eğitim kümesi 1070'ten 1007'ye inmiştir.
+
+Çıkarılan model (M3) eğitim verisinde çok daha iyi görünür (düzeltilmiş R² ≈ 0,90, artık std. hatası 0,42 → 0,28). **Bu tek başına bir kanıt değildir:** çıkarılan gözlemler tam da modelin kötü uydurduğu gözlemlerdir, dolayısıyla eğitim R²'sinin yükselmesi beklenir. Asıl karar, aşağıdaki test performansından verilir.
+
+## Çözüm 5: Ağırlıklı en küçük kareler (WLS)
+
+Değişen varyans devam ettiğinde, gözlemlere varyanslarıyla ters orantılı ağırlık vererek model yeniden kurulur. Standart sapma, mutlak artıkların tahmin değerlerine regresyonundan elde edilir; ağırlık = 1 / (tahmini std. sapma)².
+
+```{r wls}
+yardimci <- lm(abs(residuals(model2)) ~ fitted(model2))
+s_hat <- fitted(yardimci)
+cat("Negatif/sıfır std. sapma tahmini sayısı:", sum(s_hat <= 0), "\n")
+w <- 1 / pmax(s_hat, 1e-6)^2
+
+model4 <- lm(log(charges) ~ ., data = trainset, weights = w)
+summary(model4)
+
+# Ağırlıklı (standartlaştırılmış) artıklarla varyans ve normallik kontrolü
+rw <- residuals(model4) * sqrt(w)
+plot(fitted(model4), rw, main = "WLS: ağırlıklı artık - tahmin", xlab = "Tahmin", ylab = "Ağırlıklı artık")
+abline(h = 0, col = "red")
+bptest(rw ~ fitted(model4))
+shapiro.test(rw)
+```
+
+**Yorum.** WLS değişen varyansı **büyük ölçüde azaltır:** ağırlıklı artıklar için Breusch-Pagan p-değeri ≈ 10⁻⁹'dan ≈ 0,025'e çıkmıştır. Yine de 0,05'in altında olduğundan sorun tam giderilmemiştir. Normallik (Shapiro-Wilk p < 0,001) ise değişmemiştir; WLS normallik sorununu çözmez. Katsayı tahminleri M2'ye çok yakın kalır.
+
+## Test verisinde performans karşılaştırması
+
+Log-modellerin tahminleri `exp()` ile orijinal ölçeğe çevrilir; tüm modeller test verisinde **masraf ölçeğinde** karşılaştırılır.
+
+```{r karsilastir}
+degerlendir <- function(m, log_model, veri = testset) {
+  tahmin <- predict(m, veri)
+  if (log_model) tahmin <- exp(tahmin)
+  c(RMSE = RMSE(tahmin, veri$charges),
+    MAE  = MAE(tahmin, veri$charges),
+    R2   = R2(tahmin, veri$charges))
+}
+sonuc <- rbind(
+  "M1: charges ~ . (ham)"                  = degerlendir(model1, FALSE),
+  "M2: log(charges) ~ ."                   = degerlendir(model2, TRUE),
+  "M3: M2, aykırı/etkili çıkarıldı"        = degerlendir(model3, TRUE),
+  "M4: M2, WLS"                            = degerlendir(model4, TRUE),
+  "M5: log, smoker × obese etkileşimi"     = degerlendir(model_e, TRUE, testset_e)
+)
+round(sonuc, 3)
+```
+
+**Yorum.**
+
+- **RMSE ve R²:** Ham ölçekte kurulan **M1 en iyisidir** (RMSE ≈ 6.900, R² ≈ 0,70). Log modeller (M2–M4) çok yüksek masrafları (sigara içenler) hafife aldığı için kare hatası büyür (RMSE ≈ 9.000–9.500).
+- **MAE:** M1–M4 ≈ 4.700 civarındadır. **Etkileşimli model (M5) en düşük MAE'ye sahiptir (≈ 4.590)** ve log modeller arasında en yüksek test R²'ye ulaşır (≈ 0,655; M2 için 0,585). Etkileşim, tipik bir müşteri için tahmini iyileştirir.
+- **Aykırı/etkili gözlemleri çıkarmak (M3) test performansını kötüleştirmiştir** (RMSE 9.079 → 9.476, R² 0,585 → 0,556). Genel ilke olarak çıkarma sonrası performans düşüyorsa bu gözlemler gürültü değil, **etkili ama geçerli** gözlemlerdir ve modelde kalmalıdır.
+- **WLS (M4)**, M2'ye göre sadece çok küçük bir iyileşme sağlar (RMSE 9.079 → 9.010).
+- Log dönüşümü varsayımlar açısından (BP istatistiği) bir miktar fayda sağlamasına rağmen, **RMSE açısından bu veride avantaj getirmemiştir.** Log modeller içinde asıl iyileşme etkileşim terimiyle gelmiştir.
+
+## Temel bileşenler regresyonu (PCR)
+
+PCR çoklu bağlantı sorununa çözümdür. Bu veride VIF değerleri ≈ 1 olduğundan, gerçekten gerekli olup olmadığı çapraz doğrulama ile sınanır (yalnızca sayısal değişkenlerle).
+
+```{r pcr}
+set.seed(123)
+pcr_m <- pcr(log(charges) ~ age + bmi + children, data = trainset, scale = TRUE, validation = "CV")
+pcrCV <- RMSEP(pcr_m, estimate = "CV")
+plot(pcrCV, main = "PCR - bileşen sayısına göre CV hatası", col = "red")
+pcrCV$val[1, 1, ]
+which.min(pcrCV$val[1, 1, ]) - 1
+```
+
+**Yorum.** Çapraz doğrulama hatası bileşen sayısı arttıkça düşer (0,917 → 0,798 → 0,795 → 0,747) ve en küçük değere **tüm bileşenler** (3) kullanıldığında ulaşır. Bileşen atmanın kazancı yoktur; çoklu bağlantı olmayan bu veride **PCR gereksizdir.**
+
+## K-katlı çapraz doğrulama ile kararlılık kontrolü
+
+Tek bir eğitim/test bölünmesi şansa bağlı olabilir. Tüm veri 10 parçaya bölünür; her parça sırayla test, kalanı eğitim olarak kullanılır ve hata ölçütlerinin ortalaması ile standart sapması alınır.
+
+```{r cv-lineer}
+set.seed(145)
+katlar <- createFolds(d$charges, k = 10)
+cv_sonuc <- t(sapply(katlar, function(ix) {
+  tr <- obez_ekle(d[-ix, ]); te <- obez_ekle(d[ix, ])
+  a <- lm(charges ~ age + sex + bmi + children + smoker + region, tr)
+  b <- lm(log(charges) ~ age + sex + bmi + children + smoker + region, tr)
+  e <- lm(log(charges) ~ age + sex + children + region + smoker * obese, tr)
+  pa <- predict(a, te); pb <- exp(predict(b, te)); pe <- exp(predict(e, te))
+  c(M1_RMSE = RMSE(pa, te$charges), M2_RMSE = RMSE(pb, te$charges), M5_RMSE = RMSE(pe, te$charges),
+    M1_MAE  = MAE(pa, te$charges),  M2_MAE  = MAE(pb, te$charges),  M5_MAE  = MAE(pe, te$charges))
+}))
+data.frame(Olcut = colnames(cv_sonuc),
+           Ortalama = round(colMeans(cv_sonuc)),
+           Std_Sapma = round(apply(cv_sonuc, 2, sd)))
+```
+
+**Yorum.** 10 katın ortalamasında ham model (M1) RMSE ≈ 6.070 (± 526) iken log model (M2) ≈ 8.400 (± 780) ve etkileşimli log model (M5) ≈ 8.730 (± 1.540)'dir; ham ve log modeller arasındaki fark standart sapmalardan çok büyüktür, yani **tek bölünmedeki sıralama şansa bağlı değildir.** M5'in RMSE'si kattan kata çok dalgalıdır (yüksek standart sapma): modelin çok yüksek masraflı birkaç gözlemi tahmin etmedeki başarısı bölünmeye duyarlıdır. MAE'de M5 en düşük ortalamaya sahiptir (≈ 4.110; M1 ≈ 4.200, M2 ≈ 4.250), ancak aradaki fark standart sapmaların (≈ 260–620) içindedir, yani **MAE açısından üç model istatistiksel olarak ayırt edilemez.**
+
