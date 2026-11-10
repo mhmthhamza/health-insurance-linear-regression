@@ -357,3 +357,26 @@ data.frame(Olcut = colnames(cv_sonuc),
 
 **Yorum.** 10 katın ortalamasında ham model (M1) RMSE ≈ 6.070 (± 526) iken log model (M2) ≈ 8.400 (± 780) ve etkileşimli log model (M5) ≈ 8.730 (± 1.540)'dir; ham ve log modeller arasındaki fark standart sapmalardan çok büyüktür, yani **tek bölünmedeki sıralama şansa bağlı değildir.** M5'in RMSE'si kattan kata çok dalgalıdır (yüksek standart sapma): modelin çok yüksek masraflı birkaç gözlemi tahmin etmedeki başarısı bölünmeye duyarlıdır. MAE'de M5 en düşük ortalamaya sahiptir (≈ 4.110; M1 ≈ 4.200, M2 ≈ 4.250), ancak aradaki fark standart sapmaların (≈ 260–620) içindedir, yani **MAE açısından üç model istatistiksel olarak ayırt edilemez.**
 
+# Sonuç
+
+**Doğrusal regresyon**
+
+- Masrafı açıklayan temel değişkenler **sigara, yaş, çocuk sayısı ve BMI'dir**; sigara açık ara en güçlüsüdür. Cinsiyet ve bölge etkisi küçüktür.
+- **En önemli bulgu etkileşimdir:** obezitenin masrafa etkisi yalnızca sigara içenlerde ortaya çıkar (sigara × obezite). Etkileşim modele eklendiğinde AIC ≈ 108 puan düşmüş, düzeltilmiş R² ≈ 0,81'e yükselmiş, test MAE ve R² iyileşmiştir.
+- Çoklu bağlantı ve otokorelasyon sorunu yoktur. **Normallik ve sabit varyans varsayımları sağlanmamaktadır;** log dönüşümü, adımsal seçim, etkileşim, aykırı gözlem çıkarma ve WLS bu sorunu tam gidermemiştir (etkileşim ve WLS değişen varyansı belirgin biçimde azaltmıştır).
+- Aykırı/etkili gözlemleri çıkarmak test performansını kötüleştirmiştir; bu gözlemler geçerlidir.
+- Test ve 10 katlı çapraz doğrulamada ham ölçekli model RMSE bakımından en iyidir; MAE bakımından etkileşimli model en düşük ortalamaya sahiptir ancak fark çapraz doğrulama standart sapmaları içindedir. Varsayım ihlalleri nedeniyle **p-değerleri ve güven aralıkları dikkatle yorumlanmalıdır.**
+- PCR gereksizdir (çoklu bağlantı yoktur).
+
+**Sınırlılıklar**
+
+- Veri eğitim amaçlı, büyük olasılıkla simüle edilmiş bir veridir; sonuçlar gerçek bir sigorta portföyüne genellenemez.
+- Doğrusal modellerde normallik ve sabit varyans varsayımları tam sağlanamamıştır; artık grafiklerindeki kalan kümelerin kaynağı belirlenememiştir.
+
+- Obezite eşiği (BMI ≥ 30) dışarıdan alınmış bir kestirimdir; BMI sürekli bırakılıp etkileşim kurulduğunda sonuçlar değişebilir.
+
+# Tekrarlanabilirlik
+
+```{r oturum}
+sessionInfo()
+```
